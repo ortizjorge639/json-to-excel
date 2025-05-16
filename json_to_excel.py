@@ -36,37 +36,30 @@ def load_json_data(file_path):
 def process_json_data(json_data):
     """
     Process JSON data to extract and format high-order and low-order text relationships.
-    The data is extracted exactly as is without any modifications.
-    
+    Extracts only from payload.results, ignores metadata, and ensures reasoning is shown only once per publication per high-order text.
     Returns a list of dictionaries ready for DataFrame creation.
     """
     rows = []
-    
-    # Track publication IDs that have already had reasoning added (for reasoning assignment)
-    used_publication_ids = set()
-    
+
     # Support multiple JSON root structures
-    # 1. If input is a dict with 'payload'->'results', use that
     if isinstance(json_data, dict) and 'payload' in json_data and 'results' in json_data['payload']:
         items = json_data['payload']['results']
-    # 2. If it's a list, use as is
     elif isinstance(json_data, list):
         items = json_data
-    # 3. If it's a dict (single item), wrap in list
     elif isinstance(json_data, dict):
         items = [json_data]
     else:
         print("Error: Unsupported JSON structure.")
         exit(1)
-    # Process each item in the JSON data
+
     for item in items:
-        # Extract high-order text information
         high_order_texts = item.get('high_order_text', [])
         reasonings = item.get('reasonings', [])
-        
-        # Process each high-order text entry
+        # Build publication reasoning map for quick lookup
+        pub_reasoning_map = {str(r.get('publication_ID', '')): r.get('reasoning', '') for r in reasonings}
+        # For each high-order text
         for hot in high_order_texts:
-            # Create row for high-order text
+            # Add high-order text row (no reasoning)
             high_order_row = {
                 'Text Type': 'High-Order Text',
                 'Paragraph ID': hot.get('paragraph_ID', ''),
@@ -77,50 +70,27 @@ def process_json_data(json_data):
                 'Reasonings': ''
             }
             rows.append(high_order_row)
-            
-            # Process each associated low-order text
+            # Track which publications have shown reasoning for this high-order text
+            reasoning_shown = set()
+            # For each low-order text
             for lot in hot.get('low_order_texts', []):
-                publication_id = lot.get('publication_ID', '')
+                publication_id = str(lot.get('publication_ID', ''))
                 paragraph_id = lot.get('paragraph_ID', '')
-                tag = lot.get('tag', f"INCON-{hot.get('paragraph_ID', '')}")
-                similarity_score = lot.get('similarity_score', '')
-                task_text = lot.get('text', '')
-
-                # Assign reasoning only for the first occurrence of each publication_ID (case sensitive)
-                reasoning_text = None
-                if publication_id and publication_id not in used_publication_ids:
-                    for reasoning in reasonings:
-                        # Use correct key: publication_ID (case sensitive)
-                        if reasoning.get('publication_ID') == publication_id:
-                            reasoning_text = reasoning.get('reasoning', None)
-                            break
-                    used_publication_ids.add(publication_id)
-
-                # Handle CONF- tags: set all fields except Tag and Reasonings to None
-                if tag and str(tag).startswith("CONF-"):
-                    low_order_row = {
-                        'Text Type': None,
-                        'Paragraph ID': None,
-                        'Publication ID': None,
-                        'Task Text': None,
-                        'Tag': tag,
-                        'Similarity Score': None,
-                        'Reasonings': reasoning_text
-                    }
-                    rows.append(low_order_row)
-                    continue
-
+                # Only show reasoning for first occurrence of this publication_id under this high-order text
+                reasoning_text = ''
+                if publication_id and publication_id not in reasoning_shown:
+                    reasoning_text = pub_reasoning_map.get(publication_id, '')
+                    reasoning_shown.add(publication_id)
                 low_order_row = {
                     'Text Type': 'Low-Order Text',
                     'Paragraph ID': paragraph_id,
                     'Publication ID': publication_id,
-                    'Task Text': task_text,
-                    'Tag': tag,
-                    'Similarity Score': similarity_score,
+                    'Task Text': lot.get('text', ''),
+                    'Tag': f"INCON-{hot.get('paragraph_ID', '')}",
+                    'Similarity Score': lot.get('similarity_score', ''),
                     'Reasonings': reasoning_text
                 }
                 rows.append(low_order_row)
-    
     return rows
 
 def create_excel_file(data_rows, output_path):
